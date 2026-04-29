@@ -472,14 +472,17 @@ def cmd_scan(
             "(e.g. WSL /mnt/c). Recommended: 4-6 for typical project layouts."
         ),
     ),
-    append: bool = typer.Option(
-        False, "--append", "-a",
-        help="Union new projects into the existing config.projects (default: replace).",
+    replace: bool = typer.Option(
+        False, "--replace",
+        help=(
+            "Replace `config.projects` with just the projects found by this run. "
+            "By default, scan unions newly-found projects into the existing list."
+        ),
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Emit progress to stderr."),
     json_output: bool = typer.Option(False, "--json", help="Emit JSON instead of a table."),
 ) -> None:
-    """Scan roots for projects with `.claude/skills` or `.agents/skills`. Updates config.projects."""
+    """Scan roots for projects with `.claude/skills` or `.agents/skills`. Unions into config.projects (use --replace to overwrite)."""
     _global_flags(verbose, json_output)
     if max_depth is not None and max_depth < 0:
         fail_json("--max-depth must be >= 0")
@@ -501,18 +504,16 @@ def cmd_scan(
         claude_p, codex_p = _walk_for_layouts(r, max_depth=max_depth)
         for p in claude_p + codex_p:
             found.add(str(p))
-    vlog(f"scan: complete; {len(found)} project(s) found total")
+    vlog(f"scan: complete; {len(found)} project(s) found in this run")
 
-    previous = list(cfg.get("projects", []))
-    if append:
-        merged = sorted(set(previous) | found)
-    else:
-        merged = sorted(found)
-        if len(found) < len(previous):
-            warn(
-                f"scan replaces {len(previous)} existing project(s) with {len(found)}; "
-                f"pass --append to union instead"
-            )
+    previous = set(cfg.get("projects", []))
+    merged = sorted(found if replace else previous | found)
+    added = len(set(merged) - previous)
+    removed = len(previous - set(merged))
+    vlog(
+        f"scan: cfg.projects {len(previous)} -> {len(merged)} "
+        f"(+{added}, -{removed}; mode={'replace' if replace else 'union'})"
+    )
 
     cfg["projects"] = merged
     save_config(state.config_path, cfg)
