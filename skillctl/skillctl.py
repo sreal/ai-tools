@@ -405,6 +405,23 @@ def vlog(msg: str) -> None:
         print(f"[skillctl] {msg}", file=sys.stderr, flush=True)
 
 
+def _verbose_flag(verbose: bool) -> None:
+    """Subcommand-local --verbose flips the global setting on (only)."""
+    if verbose:
+        state.verbose = True
+
+
+def _json_flag(json_output: bool) -> None:
+    """Subcommand-local --json flips the global setting on (only)."""
+    if json_output:
+        state.json_output = True
+
+
+def _global_flags(verbose: bool, json_output: bool) -> None:
+    _verbose_flag(verbose)
+    _json_flag(json_output)
+
+
 def fail_json(msg: str, exit_code: int = EXIT_ERROR) -> None:
     """For --json mode: write {"error": ...} to stdout, error to stderr, exit."""
     err(msg)
@@ -423,8 +440,11 @@ def cmd_scan(
     root: list[Path] = typer.Option(
         None, "--root", "-r", help="Override scan roots (repeatable). Defaults to config scan_roots."
     ),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Emit progress to stderr."),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON instead of a table."),
 ) -> None:
     """Scan roots for projects with `.claude/skills` or `.agents/skills`. Updates config.projects."""
+    _global_flags(verbose, json_output)
     cfg = state.config
     roots: list[Path]
     if root:
@@ -467,8 +487,11 @@ def cmd_list(
     project: Optional[Path] = typer.Option(None, "--project", help="Filter to a single project."),
     scope: Optional[str] = typer.Option(None, "--scope", help="Filter by scope: user|project."),
     layout: Optional[str] = typer.Option(None, "--layout", help="Filter by layout: claude|codex."),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Emit progress to stderr."),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON instead of a table."),
 ) -> None:
     """List installed skills across configured homes and projects."""
+    _global_flags(verbose, json_output)
     cfg = state.config
     if scope is not None and scope not in ("user", "project"):
         fail_json("--scope must be 'user' or 'project'")
@@ -532,8 +555,11 @@ def cmd_install(
         None, "--project", help="Install into a single project instead of all configured homes."
     ),
     force: bool = typer.Option(False, "--force", help="Overwrite existing skill directories."),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Emit progress to stderr."),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON instead of a table."),
 ) -> None:
     """Install a skill from the vault to all configured destinations (or a single project)."""
+    _global_flags(verbose, json_output)
     cfg = state.config
     vault_str = cfg.get("vault", "")
     if not vault_str:
@@ -614,8 +640,11 @@ def cmd_remove(
     project: Optional[Path] = typer.Option(
         None, "--project", help="Remove from a single project instead of all configured homes."
     ),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Emit progress to stderr."),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON instead of a table."),
 ) -> None:
     """Remove a skill from all configured destinations (or a single project)."""
+    _global_flags(verbose, json_output)
     cfg = state.config
     layouts = list(cfg.get("install_layouts", LAYOUTS.keys()))
     targets: list[Path] = []
@@ -665,8 +694,13 @@ def cmd_remove(
 
 
 @vault_app.command("set")
-def cmd_vault_set(path: Path = typer.Argument(..., help="Vault directory path.")) -> None:
+def cmd_vault_set(
+    path: Path = typer.Argument(..., help="Vault directory path."),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Emit progress to stderr."),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON instead of a table."),
+) -> None:
     """Set the vault directory in the config."""
+    _global_flags(verbose, json_output)
     cfg = state.config
     cfg["vault"] = str(path)
     save_config(state.config_path, cfg)
@@ -677,8 +711,12 @@ def cmd_vault_set(path: Path = typer.Argument(..., help="Vault directory path.")
 
 
 @vault_app.command("list")
-def cmd_vault_list() -> None:
+def cmd_vault_list(
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Emit progress to stderr."),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON instead of a table."),
+) -> None:
     """List skills and versions in the vault."""
+    _global_flags(verbose, json_output)
     cfg = state.config
     vault_str = cfg.get("vault", "")
     if not vault_str:
@@ -717,8 +755,12 @@ def cmd_vault_list() -> None:
 
 
 @config_app.command("show")
-def cmd_config_show() -> None:
+def cmd_config_show(
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Emit progress to stderr."),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON instead of a table."),
+) -> None:
     """Show resolved config and the set of paths every install would touch."""
+    _global_flags(verbose, json_output)
     cfg = state.config
     homes = list(cfg.get("homes", []))
     projects = list(cfg.get("projects", []))
