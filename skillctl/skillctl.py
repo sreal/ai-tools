@@ -458,7 +458,11 @@ def fail_json(msg: str, exit_code: int = EXIT_ERROR) -> None:
 @app.command("scan")
 def cmd_scan(
     root: list[Path] = typer.Option(
-        None, "--root", "-r", help="Override scan roots (repeatable). Defaults to config scan_roots."
+        None, "--root", "-r",
+        help=(
+            "One-off scan root override (repeatable). Does NOT modify "
+            "`scan_roots` in the config. Defaults to config `scan_roots`."
+        ),
     ),
     max_depth: Optional[int] = typer.Option(
         None,
@@ -467,6 +471,10 @@ def cmd_scan(
             "Limit walk depth (root is 0). Useful on large/slow trees "
             "(e.g. WSL /mnt/c). Recommended: 4-6 for typical project layouts."
         ),
+    ),
+    append: bool = typer.Option(
+        False, "--append", "-a",
+        help="Union new projects into the existing config.projects (default: replace).",
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Emit progress to stderr."),
     json_output: bool = typer.Option(False, "--json", help="Emit JSON instead of a table."),
@@ -479,7 +487,6 @@ def cmd_scan(
     roots: list[Path]
     if root:
         roots = [Path(p) for p in root]
-        cfg["scan_roots"] = [str(p) for p in roots]
     else:
         roots = [Path(p) for p in cfg.get("scan_roots", [])]
     if not roots:
@@ -496,14 +503,25 @@ def cmd_scan(
             found.add(str(p))
     vlog(f"scan: complete; {len(found)} project(s) found total")
 
-    cfg["projects"] = sorted(found)
+    previous = list(cfg.get("projects", []))
+    if append:
+        merged = sorted(set(previous) | found)
+    else:
+        merged = sorted(found)
+        if len(found) < len(previous):
+            warn(
+                f"scan replaces {len(previous)} existing project(s) with {len(found)}; "
+                f"pass --append to union instead"
+            )
+
+    cfg["projects"] = merged
     save_config(state.config_path, cfg)
 
     if state.json_output:
-        emit_json({"projects": sorted(found)})
+        emit_json({"projects": merged})
         return
 
-    rows = [[p] for p in sorted(found)]
+    rows = [[p] for p in merged]
     print_table(["project"], rows)
 
 

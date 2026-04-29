@@ -128,8 +128,19 @@ is recorded as a project when it directly contains `.claude/skills/` or
 `.agents/skills/`. Results overwrite `projects` in the config.
 
 ```
-skillctl scan [--root PATH]... [--max-depth N] [--verbose]
+skillctl scan [--root PATH]... [--max-depth N] [--append] [--verbose]
 ```
+
+`--root` (`-r`) is a one-off override for that invocation only — it does
+**not** modify `scan_roots` in the config. To persist roots, edit
+`scan_roots` in the config file by hand.
+
+By default, scan **replaces** `projects` in the config with what it just
+found. To scan multiple roots across separate invocations and accumulate
+the results, pass `--append` (`-a`) to union the new findings into the
+existing list. As a safety check, when scan would replace existing
+projects with a *smaller* set, it prints a warning to stderr suggesting
+`--append`.
 
 Use `--max-depth N` (or `-d N`) to cap descent. Root is depth 0; immediate
 children are 1; etc. Recommended values:
