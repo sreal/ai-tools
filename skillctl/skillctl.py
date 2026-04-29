@@ -355,6 +355,7 @@ app.add_typer(config_app, name="config")
 class AppState:
     config_path: Path
     config: dict
+    json_output: bool = False
 
 
 state: AppState  # populated in callback
@@ -366,11 +367,26 @@ def _root(
     config: Optional[Path] = typer.Option(
         None, "--config", help="Path to config.json (default: $SKILLCTL_CONFIG or XDG location)."
     ),
+    json_output: bool = typer.Option(
+        False, "--json", help="Emit machine-readable JSON instead of a table."
+    ),
 ) -> None:
     global state
     cfg_path = resolve_config_path(config)
     cfg = load_config(cfg_path)
-    state = AppState(config_path=cfg_path, config=cfg)
+    state = AppState(config_path=cfg_path, config=cfg, json_output=json_output)
+
+
+def emit_json(payload) -> None:
+    print(json.dumps(payload, indent=2))
+
+
+def fail_json(msg: str, exit_code: int = EXIT_ERROR) -> None:
+    """For --json mode: write {"error": ...} to stdout, error to stderr, exit."""
+    err(msg)
+    if state.json_output:
+        emit_json({"error": msg})
+    raise typer.Exit(exit_code)
 
 
 # ---------------------------------------------------------------------------
@@ -393,8 +409,7 @@ def cmd_scan(
     else:
         roots = [Path(p) for p in cfg.get("scan_roots", [])]
     if not roots:
-        err("no scan roots configured. Use --root or set scan_roots in config.")
-        raise typer.Exit(EXIT_ERROR)
+        fail_json("no scan roots configured. Use --root or set scan_roots in config.")
 
     found: set[str] = set()
     for r in roots:
@@ -407,6 +422,10 @@ def cmd_scan(
 
     cfg["projects"] = sorted(found)
     save_config(state.config_path, cfg)
+
+    if state.json_output:
+        emit_json({"projects": sorted(found)})
+        return
 
     rows = [[p] for p in sorted(found)]
     print_table(["project"], rows)
@@ -426,11 +445,9 @@ def cmd_list(
     """List installed skills across configured homes and projects."""
     cfg = state.config
     if scope is not None and scope not in ("user", "project"):
-        err("--scope must be 'user' or 'project'")
-        raise typer.Exit(EXIT_ERROR)
+        fail_json("--scope must be 'user' or 'project'")
     if layout is not None and layout not in LAYOUTS:
-        err(f"--layout must be one of: {', '.join(LAYOUTS)}")
-        raise typer.Exit(EXIT_ERROR)
+        fail_json(f"--layout must be one of: {', '.join(LAYOUTS)}")
 
     homes = list(cfg.get("homes", []))
     projects = list(cfg.get("projects", []))
@@ -445,6 +462,21 @@ def cmd_list(
 
     if scope is not None:
         records = [r for r in records if r.scope == scope]
+
+    if state.json_output:
+        emit_json([
+            {
+                "scope": r.scope,
+                "layout": r.layout,
+                "location": r.location,
+                "name": r.name,
+                "version": r.version,
+                "source": r.source,
+                "path": str(r.path),
+            }
+            for r in records
+        ])
+        return
 
     rows = [
         [r.scope, r.layout, r.location, r.name, r.version, r.source, str(r.path)]
@@ -479,24 +511,22 @@ def cmd_install(
     cfg = state.config
     vault_str = cfg.get("vault", "")
     if not vault_str:
-        err("vault is not configured. Run `skillctl vault set <path>`.")
-        raise typer.Exit(EXIT_ERROR)
+        fail_json("vault is not configured. Run `skillctl vault set <path>`.")
     vault = Path(vault_str)
     if not vault.is_dir():
-        err(f"vault does not exist: {vault}")
-        raise typer.Exit(EXIT_ERROR)
+        fail_json(f"vault does not exist: {vault}")
 
     name, version = _parse_skill_spec(skill)
     if version is None:
         version = vault_default_version(vault, name)
         if version is None:
-            err(f"no version specified and no `default` file at {vault / name / DEFAULT_FILE_NAME}")
-            raise typer.Exit(EXIT_ERROR)
+            fail_json(
+                f"no version specified and no `default` file at {vault / name / DEFAULT_FILE_NAME}"
+            )
 
     src = vault_skill_path(vault, name, version)
     if not src.is_dir() or not (src / SKILL_FILE_NAME).is_file():
-        err(f"vault entry not found or missing SKILL.md: {src}")
-        raise typer.Exit(EXIT_ERROR)
+        fail_json(f"vault entry not found or missing SKILL.md: {src}")
 
     layouts = list(cfg.get("install_layouts", LAYOUTS.keys()))
     targets: list[tuple[str, str, Path]] = []  # (scope, layout, dest_skill_path)
@@ -506,8 +536,7 @@ def cmd_install(
     else:
         homes = list(cfg.get("homes", []))
         if not homes:
-            err("no homes configured and no --project given. Edit config or pass --project.")
-            raise typer.Exit(EXIT_ERROR)
+            fail_json("no homes configured and no --project given. Edit config or pass --project.")
         for layout, _home, skills_root in expand_user_paths(homes, layouts):
             targets.append(("user", layout, skills_root / name))
 
@@ -517,6 +546,8 @@ def cmd_install(
         if existing:
             for _scope, _layout, p in existing:
                 err(f"already installed: {p}")
+            if state.json_output:
+                emit_json({"already_installed": [str(p) for _s, _l, p in existing]})
             raise typer.Exit(EXIT_ALREADY_INSTALLED)
 
     # Fan-out copy. Best-effort: continue past failures, report at end.
@@ -532,8 +563,13 @@ def cmd_install(
         except Exception as e:
             failures.append((dest, str(e)))
 
-    rows = [["ok", str(p)] for p in successes] + [["FAIL", str(p)] for p, _ in failures]
-    print_table(["status", "path"], rows)
+    if state.json_output:
+        results = [{"status": "ok", "path": str(p)} for p in successes]
+        results += [{"status": "FAIL", "path": str(p), "error": msg} for p, msg in failures]
+        emit_json({"results": results})
+    else:
+        rows = [["ok", str(p)] for p in successes] + [["FAIL", str(p)] for p, _ in failures]
+        print_table(["status", "path"], rows)
     for p, msg in failures:
         err(f"{p}: {msg}")
 
@@ -563,28 +599,34 @@ def cmd_remove(
     else:
         homes = list(cfg.get("homes", []))
         if not homes:
-            err("no homes configured and no --project given.")
-            raise typer.Exit(EXIT_ERROR)
+            fail_json("no homes configured and no --project given.")
         for _layout, _home, skills_root in expand_user_paths(homes, layouts):
             targets.append(skills_root / skill)
 
     successes: list[Path] = []
     failures: list[tuple[Path, str]] = []
     rows: list[list[str]] = []
+    json_results: list[dict] = []
     for dest in targets:
         if not dest.exists():
             warn(f"not installed: {dest}")
             rows.append(["missing", str(dest)])
+            json_results.append({"status": "missing", "path": str(dest)})
             continue
         try:
             shutil.rmtree(dest)
             successes.append(dest)
             rows.append(["ok", str(dest)])
+            json_results.append({"status": "ok", "path": str(dest)})
         except Exception as e:
             failures.append((dest, str(e)))
             rows.append(["FAIL", str(dest)])
+            json_results.append({"status": "FAIL", "path": str(dest), "error": str(e)})
 
-    print_table(["status", "path"], rows)
+    if state.json_output:
+        emit_json({"results": json_results})
+    else:
+        print_table(["status", "path"], rows)
     for p, msg in failures:
         err(f"{p}: {msg}")
     if failures:
@@ -602,7 +644,10 @@ def cmd_vault_set(path: Path = typer.Argument(..., help="Vault directory path.")
     cfg = state.config
     cfg["vault"] = str(path)
     save_config(state.config_path, cfg)
-    print(f"vault set: {path}")
+    if state.json_output:
+        emit_json({"vault": str(path)})
+    else:
+        print(f"vault set: {path}")
 
 
 @vault_app.command("list")
@@ -611,14 +656,13 @@ def cmd_vault_list() -> None:
     cfg = state.config
     vault_str = cfg.get("vault", "")
     if not vault_str:
-        err("vault is not configured. Run `skillctl vault set <path>`.")
-        raise typer.Exit(EXIT_ERROR)
+        fail_json("vault is not configured. Run `skillctl vault set <path>`.")
     vault = Path(vault_str)
     if not vault.is_dir():
-        err(f"vault does not exist: {vault}")
-        raise typer.Exit(EXIT_ERROR)
+        fail_json(f"vault does not exist: {vault}")
 
     rows: list[list[str]] = []
+    json_entries: list[dict] = []
     for skill_dir in sorted(vault.iterdir()):
         if not skill_dir.is_dir():
             continue
@@ -626,9 +670,19 @@ def cmd_vault_list() -> None:
         for ver_dir in sorted(skill_dir.iterdir()):
             if not ver_dir.is_dir():
                 continue
-            marker = "*" if ver_dir.name == default_v else ""
+            is_default = ver_dir.name == default_v
+            marker = "*" if is_default else ""
             rows.append([skill_dir.name, ver_dir.name, marker, str(ver_dir)])
-    print_table(["skill", "version", "default", "path"], rows)
+            json_entries.append({
+                "skill": skill_dir.name,
+                "version": ver_dir.name,
+                "default": is_default,
+                "path": str(ver_dir),
+            })
+    if state.json_output:
+        emit_json(json_entries)
+    else:
+        print_table(["skill", "version", "default", "path"], rows)
 
 
 # ---------------------------------------------------------------------------
@@ -640,20 +694,29 @@ def cmd_vault_list() -> None:
 def cmd_config_show() -> None:
     """Show resolved config and the set of paths every install would touch."""
     cfg = state.config
-    print(f"config_path: {state.config_path}")
-    print(json.dumps(cfg, indent=2))
-    print()
-
     homes = list(cfg.get("homes", []))
     projects = list(cfg.get("projects", []))
     layouts = list(cfg.get("install_layouts", LAYOUTS.keys()))
 
-    rows: list[list[str]] = []
+    targets: list[dict] = []
     for layout, home, p in expand_user_paths(homes, layouts):
-        rows.append(["user", layout, home, str(p)])
+        targets.append({"scope": "user", "layout": layout, "location": home, "skills_root": str(p)})
     for project in projects:
         for layout, _proj, p in expand_project_paths(project, layouts):
-            rows.append(["project", layout, project, str(p)])
+            targets.append({"scope": "project", "layout": layout, "location": project, "skills_root": str(p)})
+
+    if state.json_output:
+        emit_json({
+            "config_path": str(state.config_path),
+            "config": cfg,
+            "targets": targets,
+        })
+        return
+
+    print(f"config_path: {state.config_path}")
+    print(json.dumps(cfg, indent=2))
+    print()
+    rows = [[t["scope"], t["layout"], t["location"], t["skills_root"]] for t in targets]
     print_table(["scope", "layout", "location", "skills_root"], rows)
 
 

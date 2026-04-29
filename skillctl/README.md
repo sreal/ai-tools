@@ -157,3 +157,66 @@ the vault, otherwise `source=unmanaged`. Hashes are not compared.
 All listings use a fixed-column, space-padded plain-text table — same format
 for humans and machines, no color, no borders. Errors and warnings go to
 stderr.
+
+Pass `--json` (a global flag, e.g. `skillctl --json list`) to emit
+machine-readable JSON instead. Each subcommand has a documented shape:
+
+- `list --json` — array of skill records.
+- `vault list --json` — array of `{skill, version, default, path}`.
+- `scan --json` — `{"projects": [...]}`.
+- `config show --json` — `{config_path, config, targets: [...]}`.
+- `install --json` / `remove --json` — `{"results":[{status, path, error?}]}`,
+  or, on install pre-flight abort, `{"already_installed":[...]}` with exit 2.
+- Errors that bail before work emit `{"error":"..."}` to stdout (and the
+  same message to stderr) and exit 1.
+
+---
+
+## Emacs
+
+A small Emacs front-end ships under `emacs/skillctl.el`. It uses
+`tabulated-list-mode` for the list and vault views and shells out to the
+CLI with `--json` for everything else.
+
+### Setup
+
+```elisp
+(load-file "/path/to/skillctl/emacs/skillctl.el")
+
+;; If `skillctl' isn't on PATH, point at the script directly:
+(setq skillctl-program '("uv" "run" "/path/to/skillctl/skillctl.py"))
+
+;; Optional: pin the config file (otherwise skillctl resolves it itself):
+(setq skillctl-config-file "~/.config/skillctl/config.json")
+```
+
+### Commands
+
+- `M-x skillctl-list` — tabulated buffer of installed skills.
+- `M-x skillctl-vault-list` — tabulated buffer of vault contents.
+- `M-x skillctl-install` — prompts for skill (vault completion). With
+  `C-u`, also prompts for a version; with `C-u C-u`, also for a project.
+  Asks whether to pass `--force`. If install exits 2 (already installed),
+  offers to retry with `--force`.
+- `M-x skillctl-remove` — prompts for skill (installed-list completion).
+  With `C-u`, also prompts for a project.
+- `M-x skillctl-scan` — runs `skillctl scan` and refreshes any open
+  list buffers.
+- `M-x skillctl-vault-set` — set the vault directory.
+- `M-x skillctl-config-show` — pretty-printed config + resolved targets.
+
+### Keys in `skillctl-list-mode` / `skillctl-vault-list-mode`
+
+| Key   | Action |
+|-------|--------|
+| `g`   | refresh |
+| `i`   | install (skill at point in vault buffer; prompted in list buffer) |
+| `d`   | remove the skill at point (list buffer only) |
+| `RET` | open the row's `SKILL.md` in another window |
+| `s`   | trigger a scan |
+| `v`   | switch to the vault buffer |
+| `c`   | open the config buffer |
+| `q`   | quit window |
+
+Install and remove run asynchronously into a `*skillctl-process*` buffer;
+open list buffers auto-refresh when the process exits.
