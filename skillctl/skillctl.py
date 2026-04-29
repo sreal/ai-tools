@@ -201,9 +201,15 @@ def _walk_for_layouts(root: Path) -> tuple[list[Path], list[Path]]:
     claude_projects: list[Path] = []
     codex_projects: list[Path] = []
     root = root.resolve()
+    vlog(f"scan: walking {root}{' (with .gitignore)' if spec else ''}")
 
+    dir_count = 0
+    progress_every = 2000
     for current, dirs, _files in os.walk(root, followlinks=False):
         cur_path = Path(current)
+        dir_count += 1
+        if dir_count % progress_every == 0:
+            vlog(f"scan: {dir_count} dirs visited under {root} (at {cur_path})")
         # Prune
         pruned: list[str] = []
         for d in dirs:
@@ -223,9 +229,15 @@ def _walk_for_layouts(root: Path) -> tuple[list[Path], list[Path]]:
         # Detect project layouts at this level
         if (cur_path / ".claude" / "skills").is_dir():
             claude_projects.append(cur_path)
+            vlog(f"scan: found claude project {cur_path}")
         if (cur_path / ".agents" / "skills").is_dir():
             codex_projects.append(cur_path)
+            vlog(f"scan: found codex project {cur_path}")
 
+    vlog(
+        f"scan: done {root} ({dir_count} dirs, "
+        f"{len(claude_projects)} claude, {len(codex_projects)} codex)"
+    )
     return claude_projects, codex_projects
 
 
@@ -356,6 +368,7 @@ class AppState:
     config_path: Path
     config: dict
     json_output: bool = False
+    verbose: bool = False
 
 
 state: AppState  # populated in callback
@@ -370,15 +383,26 @@ def _root(
     json_output: bool = typer.Option(
         False, "--json", help="Emit machine-readable JSON instead of a table."
     ),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Emit progress messages to stderr."
+    ),
 ) -> None:
     global state
     cfg_path = resolve_config_path(config)
     cfg = load_config(cfg_path)
-    state = AppState(config_path=cfg_path, config=cfg, json_output=json_output)
+    state = AppState(
+        config_path=cfg_path, config=cfg, json_output=json_output, verbose=verbose
+    )
 
 
 def emit_json(payload) -> None:
     print(json.dumps(payload, indent=2))
+
+
+def vlog(msg: str) -> None:
+    """Write a progress line to stderr when --verbose is set."""
+    if state.verbose:
+        print(f"[skillctl] {msg}", file=sys.stderr, flush=True)
 
 
 def fail_json(msg: str, exit_code: int = EXIT_ERROR) -> None:
@@ -411,6 +435,7 @@ def cmd_scan(
     if not roots:
         fail_json("no scan roots configured. Use --root or set scan_roots in config.")
 
+    vlog(f"scan: starting; {len(roots)} root(s): {', '.join(str(r) for r in roots)}")
     found: set[str] = set()
     for r in roots:
         if not r.is_dir():
@@ -419,6 +444,7 @@ def cmd_scan(
         claude_p, codex_p = _walk_for_layouts(r)
         for p in claude_p + codex_p:
             found.add(str(p))
+    vlog(f"scan: complete; {len(found)} project(s) found total")
 
     cfg["projects"] = sorted(found)
     save_config(state.config_path, cfg)

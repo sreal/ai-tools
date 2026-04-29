@@ -447,14 +447,18 @@ FORCE non-nil passes --force."
 
 ;;;###autoload
 (defun skillctl-scan ()
-  "Run `skillctl scan' and refresh any open list buffers."
+  "Run `skillctl scan' asynchronously, streaming progress to the process buffer.
+Always passes --verbose so the user sees per-root progress lines.  Refreshes
+any open list buffers when the scan exits."
   (interactive)
-  (let* ((result (skillctl--call-json '("scan")))
-         (projects (alist-get 'projects result)))
-    (skillctl--refresh-open-buffers)
-    (message "skillctl scan: %d project%s found"
-             (length projects)
-             (if (= (length projects) 1) "" "s"))))
+  (skillctl--run-async
+   '("--verbose" "scan")
+   (lambda (code)
+     (skillctl--refresh-open-buffers)
+     (if (eq code 0)
+         (message "skillctl scan: done (see %s)" skillctl-process-buffer-name)
+       (message "skillctl scan: exit %d (see %s)"
+                code skillctl-process-buffer-name)))))
 
 ;;;###autoload
 (defun skillctl-vault-set (path)

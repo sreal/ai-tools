@@ -126,6 +126,13 @@ Walks each scan root, honoring `.gitignore` at the root and always skipping
 `.claude/skills/` or `.agents/skills/`. Results overwrite `projects` in the
 config.
 
+Pass the global `--verbose` (or `-v`) flag to see progress on stderr —
+each root entered, each project found, a milestone every 2000 directories
+visited, and a per-root summary. Useful on slow filesystems (Windows
+mounts under WSL, network drives) where scan would otherwise sit silent
+for several seconds. Verbose output goes to stderr only, so it does not
+interfere with `--json` output on stdout.
+
 ### `install`
 
 Resolves `<vault>/<skill>/<version>/`, defaulting `<version>` to the contents
