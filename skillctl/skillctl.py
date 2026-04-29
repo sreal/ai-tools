@@ -38,7 +38,9 @@ LAYOUTS: dict[str, dict[str, str]] = {
     },
 }
 
-ALWAYS_SKIP_DIRS: frozenset[str] = frozenset({".git"})
+# Never descend into these.  `.claude` and `.agents` are project markers we
+# detect by direct probe — there's nothing useful below them for the scan.
+ALWAYS_SKIP_DIRS: frozenset[str] = frozenset({".git", ".claude", ".agents"})
 
 DEFAULT_VERSION = "0.0.0"
 DEFAULT_FILE_NAME = "default"
@@ -190,24 +192,36 @@ def _load_gitignore(root: Path) -> Optional[pathspec.PathSpec]:
     return pathspec.PathSpec.from_lines("gitwildmatch", lines)
 
 
-def _walk_for_layouts(root: Path) -> tuple[list[Path], list[Path]]:
+def _walk_for_layouts(
+    root: Path, max_depth: Optional[int] = None
+) -> tuple[list[Path], list[Path]]:
     """Walk a root and return (claude_project_dirs, codex_project_dirs).
 
     Detection rule (project scope): a directory is a project if it contains
     `.claude/skills/` (claude) or `.agents/skills/` (codex). We return the
     project root, not the skills dir.
+
+    If MAX_DEPTH is set, do not descend below that depth (root itself is
+    depth 0).  `--max-depth 0` only checks the root directory.
     """
     spec = _load_gitignore(root)
     claude_projects: list[Path] = []
     codex_projects: list[Path] = []
     root = root.resolve()
-    vlog(f"scan: walking {root}{' (with .gitignore)' if spec else ''}")
+    depth_note = f", max-depth={max_depth}" if max_depth is not None else ""
+    vlog(
+        f"scan: walking {root}{' (with .gitignore)' if spec else ''}"
+        f"{depth_note}"
+    )
 
     dir_count = 0
+    truncated = 0
     progress_every = 2000
     for current, dirs, _files in os.walk(root, followlinks=False):
         cur_path = Path(current)
         dir_count += 1
+        rel = cur_path.relative_to(root)
+        depth = 0 if str(rel) == "." else len(rel.parts)
         if dir_count % progress_every == 0:
             vlog(f"scan: {dir_count} dirs visited under {root} (at {cur_path})")
         # Prune
@@ -217,16 +231,16 @@ def _walk_for_layouts(root: Path) -> tuple[list[Path], list[Path]]:
                 continue
             full = cur_path / d
             try:
-                rel = full.resolve().relative_to(root)
+                child_rel = full.resolve().relative_to(root)
             except ValueError:
                 continue
-            rel_str = str(rel).replace(os.sep, "/") + "/"
+            rel_str = str(child_rel).replace(os.sep, "/") + "/"
             if spec is not None and spec.match_file(rel_str):
                 continue
             pruned.append(d)
         dirs[:] = pruned
 
-        # Detect project layouts at this level
+        # Detect project layouts at this level (probe, not walk).
         if (cur_path / ".claude" / "skills").is_dir():
             claude_projects.append(cur_path)
             vlog(f"scan: found claude project {cur_path}")
@@ -234,9 +248,15 @@ def _walk_for_layouts(root: Path) -> tuple[list[Path], list[Path]]:
             codex_projects.append(cur_path)
             vlog(f"scan: found codex project {cur_path}")
 
+        # Depth limit: stop descending past max_depth.
+        if max_depth is not None and depth >= max_depth and dirs:
+            truncated += 1
+            dirs[:] = []
+
+    extra = f", truncated descent at {truncated} dir(s)" if truncated else ""
     vlog(
         f"scan: done {root} ({dir_count} dirs, "
-        f"{len(claude_projects)} claude, {len(codex_projects)} codex)"
+        f"{len(claude_projects)} claude, {len(codex_projects)} codex{extra})"
     )
     return claude_projects, codex_projects
 
@@ -440,11 +460,21 @@ def cmd_scan(
     root: list[Path] = typer.Option(
         None, "--root", "-r", help="Override scan roots (repeatable). Defaults to config scan_roots."
     ),
+    max_depth: Optional[int] = typer.Option(
+        None,
+        "--max-depth", "-d",
+        help=(
+            "Limit walk depth (root is 0). Useful on large/slow trees "
+            "(e.g. WSL /mnt/c). Recommended: 4-6 for typical project layouts."
+        ),
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Emit progress to stderr."),
     json_output: bool = typer.Option(False, "--json", help="Emit JSON instead of a table."),
 ) -> None:
     """Scan roots for projects with `.claude/skills` or `.agents/skills`. Updates config.projects."""
     _global_flags(verbose, json_output)
+    if max_depth is not None and max_depth < 0:
+        fail_json("--max-depth must be >= 0")
     cfg = state.config
     roots: list[Path]
     if root:
@@ -461,7 +491,7 @@ def cmd_scan(
         if not r.is_dir():
             warn(f"scan root does not exist: {r}")
             continue
-        claude_p, codex_p = _walk_for_layouts(r)
+        claude_p, codex_p = _walk_for_layouts(r, max_depth=max_depth)
         for p in claude_p + codex_p:
             found.add(str(p))
     vlog(f"scan: complete; {len(found)} project(s) found total")

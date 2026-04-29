@@ -64,6 +64,15 @@ When nil, skillctl resolves the config path itself."
   :type 'string
   :group 'skillctl)
 
+(defcustom skillctl-scan-max-depth nil
+  "Default --max-depth value passed to `skillctl scan'.
+Nil means no limit.  Useful on slow filesystems (e.g. WSL /mnt/c) where
+unlimited scans take too long.  4-6 covers most project layouts.
+With a prefix argument, `skillctl-scan' overrides this interactively."
+  :type '(choice (const :tag "Unlimited" nil)
+                 (integer :tag "Max depth"))
+  :group 'skillctl)
+
 ;; ---------------------------------------------------------------------------
 ;; Internal helpers
 ;; ---------------------------------------------------------------------------
@@ -446,19 +455,35 @@ FORCE non-nil passes --force."
       (skillctl-remove name project))))
 
 ;;;###autoload
-(defun skillctl-scan ()
+(defun skillctl-scan (&optional max-depth)
   "Run `skillctl scan' asynchronously, streaming progress to the process buffer.
 Always passes --verbose so the user sees per-root progress lines.  Refreshes
-any open list buffers when the scan exits."
-  (interactive)
-  (skillctl--run-async
-   '("--verbose" "scan")
-   (lambda (code)
-     (skillctl--refresh-open-buffers)
-     (if (eq code 0)
-         (message "skillctl scan: done (see %s)" skillctl-process-buffer-name)
-       (message "skillctl scan: exit %d (see %s)"
-                code skillctl-process-buffer-name)))))
+any open list buffers when the scan exits.
+
+MAX-DEPTH (the depth limit passed as --max-depth) defaults to
+`skillctl-scan-max-depth'.  With a prefix argument, prompts for it
+interactively; an empty answer means unlimited."
+  (interactive
+   (list
+    (if current-prefix-arg
+        (let ((s (read-string
+                  (format-prompt "Max depth (empty=unlimited)"
+                                 (if skillctl-scan-max-depth
+                                     (number-to-string skillctl-scan-max-depth)
+                                   "")))))
+          (if (string-empty-p s) nil (string-to-number s)))
+      skillctl-scan-max-depth)))
+  (let* ((args (append (list "scan" "--verbose")
+                       (when (and max-depth (>= max-depth 0))
+                         (list "--max-depth" (number-to-string max-depth))))))
+    (skillctl--run-async
+     args
+     (lambda (code)
+       (skillctl--refresh-open-buffers)
+       (if (eq code 0)
+           (message "skillctl scan: done (see %s)" skillctl-process-buffer-name)
+         (message "skillctl scan: exit %d (see %s)"
+                  code skillctl-process-buffer-name))))))
 
 ;;;###autoload
 (defun skillctl-vault-set (path)

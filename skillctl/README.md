@@ -122,16 +122,31 @@ skillctl config show
 ### `scan`
 
 Walks each scan root, honoring `.gitignore` at the root and always skipping
-`.git`. A directory is recorded as a project when it directly contains
-`.claude/skills/` or `.agents/skills/`. Results overwrite `projects` in the
-config.
+`.git`, `.claude`, and `.agents` (the latter two are project markers we
+detect by direct probe, so there's nothing useful below them). A directory
+is recorded as a project when it directly contains `.claude/skills/` or
+`.agents/skills/`. Results overwrite `projects` in the config.
+
+```
+skillctl scan [--root PATH]... [--max-depth N] [--verbose]
+```
+
+Use `--max-depth N` (or `-d N`) to cap descent. Root is depth 0; immediate
+children are 1; etc. Recommended values:
+
+- `--max-depth 0` — only check the root directory itself.
+- `--max-depth 4-6` — typical layouts (`~/code/group/proj/sub`).
+- *(omitted)* — unlimited.
+
+This is essential on slow filesystems (Windows mounts under WSL, network
+drives, deeply-nested monorepos with `node_modules` etc.) where unlimited
+scans take forever. With `--verbose`, the per-root summary reports how
+many directories had their descent truncated.
 
 Pass the global `--verbose` (or `-v`) flag to see progress on stderr —
 each root entered, each project found, a milestone every 2000 directories
-visited, and a per-root summary. Useful on slow filesystems (Windows
-mounts under WSL, network drives) where scan would otherwise sit silent
-for several seconds. Verbose output goes to stderr only, so it does not
-interfere with `--json` output on stdout.
+visited, and a per-root summary. Verbose output goes to stderr only, so it
+does not interfere with `--json` output on stdout.
 
 ### `install`
 
@@ -195,6 +210,10 @@ CLI with `--json` for everything else.
 
 ;; Optional: pin the config file (otherwise skillctl resolves it itself):
 (setq skillctl-config-file "~/.config/skillctl/config.json")
+
+;; Optional: cap scan depth (root=0); useful on /mnt/c. With C-u, the
+;; `skillctl-scan' command prompts for an override.
+(setq skillctl-scan-max-depth 5)
 ```
 
 ### Commands
